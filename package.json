@@ -1,0 +1,22 @@
+{
+  "name": "ytmp3server",
+  "version": "1.0.0",
+  "description": "YouTubetoMP3",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^5.1.0",
+    "yt-dlp-exec": "^1.0.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "keywords": [
+    "youtube"
+  ],
+  "author": "ha",
+  "license": "MIT"
+}
