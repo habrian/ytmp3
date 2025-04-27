@@ -1,9 +1,9 @@
 const express = require('express');
 const bodyParser = require('body-parser');
 const cors = require('cors');
+const { exec } = require('child_process');
 const path = require('path');
 const fs = require('fs');
-const ytdlp = require('yt-dlp-exec');
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -13,94 +13,71 @@ app.use(bodyParser.json());
 app.use('/downloads', express.static(path.join(__dirname, 'downloads')));
 
 const downloadsDir = path.join(__dirname, 'downloads');
-const FILE_EXPIRE_HOURS = 6; // ⏰ 檔案保存時間（小時）
 
+// 確保下載資料夾存在
 if (!fs.existsSync(downloadsDir)) {
   fs.mkdirSync(downloadsDir);
 }
 
-// 字串安全化：把檔名中的奇怪字元去掉
-function sanitizeFilename(name) {
-  return name.replace(/[^a-zA-Z0-9\u4e00-\u9fa5]/g, '_');
-}
+// 自動刪除過舊的檔案（設定 1小時刪除）
+const clearOldFiles = () => {
+  const files = fs.readdirSync(downloadsDir);
+  const now = Date.now();
+  const oneHour = 1000 * 60 * 60;
 
-// 自動清除過期檔案
-function cleanOldFiles() {
-  fs.readdir(downloadsDir, (err, files) => {
-    if (err) {
-      console.error('Failed to read downloads directory:', err);
-      return;
+  files.forEach(file => {
+    const filePath = path.join(downloadsDir, file);
+    const stats = fs.statSync(filePath);
+    if (now - stats.mtimeMs > oneHour) {
+      fs.unlinkSync(filePath);
+      console.log(`刪除舊檔案: ${file}`);
     }
-
-    files.forEach((file) => {
-      const filePath = path.join(downloadsDir, file);
-      fs.stat(filePath, (err, stats) => {
-        if (err) {
-          console.error('Failed to stat file:', err);
-          return;
-        }
-
-        const now = Date.now();
-        const modifiedTime = new Date(stats.mtime).getTime();
-        const ageHours = (now - modifiedTime) / (1000 * 60 * 60);
-
-        if (ageHours > FILE_EXPIRE_HOURS) {
-          fs.unlink(filePath, (err) => {
-            if (err) {
-              console.error('Failed to delete old file:', err);
-            } else {
-              console.log('Deleted old file:', file);
-            }
-          });
-        }
-      });
-    });
   });
-}
+};
 
-// 每 30 分鐘掃一次
-setInterval(cleanOldFiles, 30 * 60 * 1000);
+// 每小時清一次
+setInterval(clearOldFiles, 60 * 60 * 1000);
 
-// POST /download
+const ytDlpPath = path.join(__dirname, 'yt-dlp');
+
 app.post('/download', async (req, res) => {
-  const { url } = req.body;
+  const url = req.body.url;
   if (!url) {
-    return res.status(400).json({ error: 'No URL provided.' });
+    return res.status(400).send('No URL provided.');
   }
 
+  const filename = `${Date.now()}.mp3`;
+  const outputPath = path.join(downloadsDir, filename);
+
   try {
-    // 先取得標題
-    const info = await ytdlp(url, {
-      dumpSingleJson: true,
-      noCheckCertificates: true,
-      noWarnings: true,
-      preferFreeFormats: true,
+    // 取得影片標題
+    const titleCmd = `${ytDlpPath} --no-warnings --encoding utf-8 --get-title "${url}"`;
+    const title = await new Promise((resolve, reject) => {
+      exec(titleCmd, (err, stdout, stderr) => {
+        if (err) reject(stderr);
+        else resolve(stdout.trim());
+      });
     });
 
-    const title = info.title || 'downloaded_audio';
-    const safeTitle = sanitizeFilename(title);
-    const filename = `${safeTitle}_${Date.now()}.mp3`;
-    const outputPath = path.join(downloadsDir, filename);
-
-    // 下載 MP3
-    await ytdlp(url, {
-      extractAudio: true,
-      audioFormat: 'mp3',
-      output: outputPath,
-    });
-
-    res.json({
-      fileUrl: `https://${req.hostname}/downloads/${encodeURIComponent(filename)}`,
-      title: title,
+    // 開始下載
+    const cmd = `${ytDlpPath} -f bestaudio --extract-audio --audio-format mp3 -o "${outputPath}" "${url}"`;
+    exec(cmd, (error) => {
+      if (error) {
+        console.error(' Download error:', error);
+        return res.status(500).send('Download failed.');
+      }
+      res.json({
+        fileUrl: `https://${req.headers.host}/downloads/${filename}`,
+        title: title,
+      });
     });
 
   } catch (error) {
-    console.error('Download or title fetch error:', error);
-    res.status(500).json({ error: 'Failed to download or fetch video info.' });
+    console.error('Title fetch error:', error);
+    res.status(500).send('Error fetching title');
   }
 });
 
-// 啟動 server
-app.listen(port, '0.0.0.0', () => {
-  console.log(`Server is running at http://localhost:${port}`);
+app.listen(port, () => {
+  console.log(` Server running at http://localhost:${port}`);
 });
